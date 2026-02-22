@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ===== 설정 =====
+TARGET_USER="supreme"
+TARGET_HOST="192.168.200.11"
+TARGET_DIR="~/review_diffs"
+
+# ===== 인자 확인 =====
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <commit-sha>"
+  exit 1
+fi
+
+SHA="$1"
+
+# ===== 커밋 존재 확인 =====
+if ! git rev-parse --verify "$SHA" >/dev/null 2>&1; then
+  echo "Error: commit '$SHA' not found."
+  exit 1
+fi
+
+OUT="/tmp/review_${SHA}.txt"
+
+echo "Generating review file: $OUT"
+
+{
+  echo "=== STAT ==="
+  git show --stat "$SHA"
+  echo
+  echo "=== DIFF ==="
+  git show "$SHA"
+} > "$OUT"
+
+echo "Sending to ${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}"
+
+ssh "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_DIR}"
+scp "$OUT" "${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}/"
+
+echo "Done."
+echo "File available at: ${TARGET_DIR}/review_${SHA}.txt"
