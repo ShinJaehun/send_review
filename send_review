@@ -8,29 +8,90 @@ TARGET_DIR="~/review_diffs"
 
 # ===== 인자 확인 =====
 if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <commit-sha>"
+  echo "Usage: $0 <commit-sha|ref|range>"
+  echo "Examples:"
+  echo "  $0 9b59ee1"
+  echo "  $0 HEAD"
+  echo "  $0 b9e0c65..HEAD"
+  echo "  $0 main...feature/my-branch"
   exit 1
 fi
 
-SHA="$1"
+REF="$1"
 
-# ===== 커밋 존재 확인 =====
-if ! git rev-parse --verify "$SHA" >/dev/null 2>&1; then
-  echo "Error: commit '$SHA' not found."
-  exit 1
+# ===== 파일명 안전 처리 =====
+SAFE_REF="$REF"
+SAFE_REF="${SAFE_REF//\//_}"
+SAFE_REF="${SAFE_REF// /_}"
+SAFE_REF="${SAFE_REF//../__}"
+SAFE_REF="${SAFE_REF//.../___}"
+
+OUT="/tmp/review_${SAFE_REF}.txt"
+
+# ===== 단일 커밋/참조 vs range 판별 =====
+IS_RANGE=0
+if [[ "$REF" == *".."* ]]; then
+  IS_RANGE=1
 fi
 
-OUT="/tmp/review_${SHA}.txt"
+if [[ "$IS_RANGE" -eq 0 ]]; then
+  # ===== 단일 커밋/참조 존재 확인 =====
+  if ! git rev-parse --verify "${REF}^{commit}" >/dev/null 2>&1; then
+    echo "Error: ref '$REF' is not a valid commit."
+    exit 1
+  fi
+else
+  # ===== range 기본 검증(양 끝이 커밋으로 해석 가능한지) =====
+  SEP=".."
+  if [[ "$REF" == *"..."* ]]; then
+    SEP="..."
+  fi
+  A="${REF%%${SEP}*}"
+  B="${REF#*${SEP}}"
+
+  if [[ -z "$A" || -z "$B" ]]; then
+    echo "Error: invalid range '$REF' (expected A${SEP}B)."
+    exit 1
+  fi
+
+  if ! git rev-parse --verify "${A}^{commit}" >/dev/null 2>&1; then
+    echo "Error: range start '$A' is not a valid commit."
+    exit 1
+  fi
+  if ! git rev-parse --verify "${B}^{commit}" >/dev/null 2>&1; then
+    echo "Error: range end '$B' is not a valid commit."
+    exit 1
+  fi
+fi
 
 echo "Generating review file: $OUT"
 
-{
-  echo "=== STAT ==="
-  git show --stat "$SHA"
-  echo
-  echo "=== DIFF ==="
-  git show "$SHA"
-} > "$OUT"
+if [[ "$IS_RANGE" -eq 0 ]]; then
+  {
+    echo "=== REF ==="
+    echo "$REF"
+    echo
+    echo "=== STAT ==="
+    git show --stat "$REF"
+    echo
+    echo "=== DIFF ==="
+    git show "$REF"
+  } > "$OUT"
+else
+  {
+    echo "=== RANGE ==="
+    echo "$REF"
+    echo
+    echo "=== LOG ==="
+    git log --oneline --decorate --reverse "$REF"
+    echo
+    echo "=== STAT ==="
+    git diff --stat "$REF"
+    echo
+    echo "=== DIFF ==="
+    git diff "$REF"
+  } > "$OUT"
+fi
 
 echo "Sending to ${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}"
 
@@ -38,4 +99,5 @@ ssh "${TARGET_USER}@${TARGET_HOST}" "mkdir -p ${TARGET_DIR}"
 scp "$OUT" "${TARGET_USER}@${TARGET_HOST}:${TARGET_DIR}/"
 
 echo "Done."
-echo "File available at: ${TARGET_DIR}/review_${SHA}.txt"
+
+echo "File available at: ${TARGET_DIR}/review_${SAFE_REF}.txt"
