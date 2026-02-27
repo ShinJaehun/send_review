@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# send_review
+#
+# 목적:
+# - make_review로 생성한 로컬 review를 원격 CODEX_REVIEW_TARGET_DIR로 scp 전송
+#
+# 사용 예:
+#   send_review HEAD
+#   send_review b9e0c65..HEAD
+#
+# 장점:
+# - 원격 환경에서는 send_review 한 번만 입력하면 make_review까지 실행됨.
+
+load_config() {
+  local cfg="${CODEX_REVIEW_CONFIG:-$HOME/.config/codex_review/config}"
+  if [[ -f "$cfg" ]]; then
+    # shellcheck disable=SC1090
+    source "$cfg"
+  fi
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: send_review <commit-sha|ref|range>
+
+Examples:
+  send_review 9b59ee1
+  send_review HEAD
+  send_review b9e0c65..HEAD
+EOF
+}
+
+require_var() {
+  local name="$1"
+  local val="${!name:-}"
+  if [[ -z "$val" ]]; then
+    echo "Error: missing required config var: $name" >&2
+    exit 1
+  fi
+}
+
+main() {
+  load_config
+
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  # 원격 전송에 필요한 값
+  require_var CODEX_REVIEW_TARGET_USER
+  require_var CODEX_REVIEW_TARGET_HOST
+  require_var CODEX_REVIEW_TARGET_DIR
+
+  local ref="$1"
+
+  # 같은 bin 디렉토리의 make_review를 호출하기 위해 스크립트 위치를 계산
+  local script_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  # make_review는 stdout에 생성 파일 경로만 출력하도록 설계되어 있음
+  local out
+  out="$("$script_dir/make_review" "$ref")"
+
+  if [[ -z "$out" || ! -f "$out" ]]; then
+    echo "Error: make_review did not produce a file. Got: '$out'" >&2
+    exit 1
+  fi
+
+  echo "Sending: $out" >&2
+  echo "To     : ${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}:${CODEX_REVIEW_TARGET_DIR}" >&2
+
+  # 원격 폴더가 없으면 생성(전송 실패 방지)
+  ssh "${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}" "mkdir -p ${CODEX_REVIEW_TARGET_DIR}"
+
+  # 실제 전송
+  scp "$out" "${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}:${CODEX_REVIEW_TARGET_DIR}/"
+
+  echo "Done. Remote dir: ${CODEX_REVIEW_TARGET_DIR}" >&2
+}
+
+main "$@"

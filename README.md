@@ -1,147 +1,260 @@
+# codex_review
 
-# send_review — Git Commit Diff 패키징 & 전송 도구
+Codex CLI + Web 인터페이스를 병행하여 사용하는 환경에서\
+**spec → 구현 → review → 토론** 흐름을 안정적으로 관리하기 위한 Bash
+도구 세트입니다.
 
-X201(코딩 머신)에서 작업한 Git 커밋의 STAT/DIFF를 텍스트 파일로 생성한 뒤,
-X230(리뷰/설계 머신)으로 scp를 통해 전송하는 간단한 자동화 도구입니다.
+------------------------------------------------------------------------
 
----
+# 목적
 
-## 개요
+이 도구의 목적은 다음 문제를 해결하는 것입니다:
 
-- X201: 코딩 + 커밋 + push (브라우저 없이)
-- X230: diff 파일을 받아 설계/리뷰 대화 진행
-- GitHub 웹 UI 복붙 대신 정확한 raw diff 사용
+-   코딩 머신 ↔ 웹 인터페이스 머신 분리 작업
+-   작업 명세(spec) 동기화
+-   git diff + commit 메시지 기반 리뷰 패킷 생성
+-   토큰 절약을 위한 커밋 메시지 중심 토론
 
----
+------------------------------------------------------------------------
 
-## 요구 사항
+# 구성 요소
 
-### 보내는 쪽 (X201)
-- git
-- ssh / scp (OpenSSH)
-- bash
+    codex_review/
+     ├── bin/
+     │    ├── pull_spec
+     │    ├── make_review
+     │    └── send_review
+     └── README.md
 
-### 받는 쪽 (X230)
-- SSH 서버 실행 중
-- ~/.ssh/authorized_keys 에 X201 공개키 등록
+설정 파일:
 
----
+    ~/.config/codex_review/config
 
-## SSH 서버 설치 (X230)
+------------------------------------------------------------------------
 
-### Ubuntu / Debian
-    sudo apt update
-    sudo apt install -y openssh-server
-    sudo systemctl enable --now ssh
+# 개념 구조
 
-### Fedora
-    sudo dnf install -y openssh-server
-    sudo systemctl enable --now sshd
+## spec.md
 
-상태 확인:
-    systemctl status ssh
-    ss -lntp | grep :22
+-   "현재 작업 계약서"
+-   프로젝트 루트에 위치
+-   항상 하나만 존재
+-   pull_spec로 overwrite됨
+-   git이 변경 이력을 관리
 
----
+## review 파일
 
-## SSH 키 생성 (X201)
+-   작업 결과 패킷
+-   commit 메시지 + stat + diff 포함
+-   timestamp prefix로 누적 관리
+-   기본적으로 git에 포함하지 않음
 
-키 확인:
-    ls -l ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+------------------------------------------------------------------------
 
-없다면 생성:
-    ssh-keygen -t ed25519 -C "x201->x230" -f ~/.ssh/id_ed25519
+# 설치
 
----
+## 1. 저장소 클론
 
-## 공개키 등록
+``` bash
+git clone <your_repo> ~/project/codex_review
+```
 
-### 방법 A (권장)
-    ssh-copy-id -i ~/.ssh/id_ed25519.pub USER@X230_HOST
+## 2. 실행 권한 부여
 
-### 방법 B (수동)
-X201에서:
-    cat ~/.ssh/id_ed25519.pub
+``` bash
+chmod +x ~/project/codex_review/bin/*
+```
 
-출력된 한 줄을 X230의 ~/.ssh/authorized_keys에 추가:
+## 3. PATH 추가 (권장)
 
-    mkdir -p ~/.ssh
-    chmod 700 ~/.ssh
-    nano ~/.ssh/authorized_keys
-    chmod 600 ~/.ssh/authorized_keys
+``` bash
+export PATH="$HOME/project/codex_review/bin:$PATH"
+```
 
----
+.bashrc 또는 .zshrc에 추가 추천.
 
-## SSH 테스트
+------------------------------------------------------------------------
 
-X201에서:
-    ssh USER@X230_HOST
+# 설정
 
-비밀번호 없이 접속되면 성공.
+파일:
 
----
+    ~/.config/codex_review/config
 
-## SSH config 설정 (권장)
+예시:
 
-X201의 ~/.ssh/config:
+``` bash
+CODEX_REVIEW_TARGET_USER="shinjaehun"
+CODEX_REVIEW_TARGET_HOST="192.168.0.1"
+CODEX_REVIEW_TARGET_DIR="~/review_diffs"
 
-Host x230
-    HostName 192.168.0.23
-    User shin
-    IdentityFile ~/.ssh/id_ed25519
+CODEX_REVIEW_SPEC_REMOTE="~/review_diffs/spec.md"
 
-권한:
-    chmod 600 ~/.ssh/config
+CODEX_REVIEW_PROJECT_DIR="$HOME/project/suksuk_project"
+CODEX_REVIEW_SPEC_LOCAL="$CODEX_REVIEW_PROJECT_DIR/spec.md"
 
-이제:
-    ssh x230
+CODEX_REVIEW_OUT_DIR="/tmp"
+```
 
----
+------------------------------------------------------------------------
 
-## send_review 스크립트 설정
+# SSH 준비 (최초 1회)
 
-스크립트 상단:
+로컬에서:
 
-TARGET_USER="shin"
-TARGET_HOST="x230"
-TARGET_DIR="~/review_diffs"
+``` bash
+ssh-keygen
+ssh-copy-id shinjaehun@192.168.0.1
+```
 
----
+테스트:
 
-## 사용법
+``` bash
+ssh shinjaehun@192.168.0.1
+```
 
-최근 커밋:
-    send_review HEAD
+비밀번호 없이 접속되면 OK.
 
-특정 SHA:
-    send_review 9b59ee1
+------------------------------------------------------------------------
 
-전송 결과:
-- X201: /tmp/review_<SHA>.txt 생성
-- X230: ~/review_diffs/ 로 업로드
+# 작업 흐름
 
----
+## 시작
 
-## 문제 해결
+``` bash
+cd ~/project/suksuk_project
+pull_spec
+```
 
-Permission denied (publickey)
-    chmod 700 ~/.ssh
-    chmod 600 ~/.ssh/authorized_keys
-    ssh -v x230
+동작: - 원격의 spec.md를 로컬 프로젝트 루트로 overwrite - 오늘 작업 명세 확정
 
-Connection refused
-    systemctl status ssh
+------------------------------------------------------------------------
 
-방화벽 (Ubuntu)
-    sudo ufw allow ssh
+## Codex 작업
 
----
+Codex CLI에서:
 
-## 보안 참고
+spec.md 기준으로 작업 수행
 
-패스프레이즈 사용 권장.
-ssh-agent 사용:
+------------------------------------------------------------------------
 
-    eval "$(ssh-agent -s)"
-    ssh-add ~/.ssh/id_ed25519"
+## 작업 종료
 
+``` bash
+send_review HEAD
+```
+
+또는
+
+``` bash
+send_review b9e0c65..HEAD
+```
+
+동작:
+
+1.  make_review 실행
+2.  review 파일 생성
+    -   timestamp 포함
+    -   commit 메시지 항상 포함
+3.  원격으로 scp 전송
+
+------------------------------------------------------------------------
+
+# review 파일 구조
+
+    === REF or RANGE ===
+
+    === COMMIT (subject + body) ===
+
+    === LOG ===
+
+    === STAT ===
+
+    === DIFF ===
+
+------------------------------------------------------------------------
+
+# 토큰 절약 전략
+
+웹 인터페이스에서:
+
+1.  먼저 commit 메시지 섹션만 복사
+2.  필요하면 STAT 추가
+3.  그래도 필요하면 특정 파일 diff만 복사
+
+→ 전체 diff를 항상 붙일 필요 없음\
+→ 토큰 소비 최소화
+
+------------------------------------------------------------------------
+
+# spec 위치
+
+프로젝트 루트:
+
+    $HOME/project/suksuk_project/spec.md
+
+항상 이 파일이 현재 작업의 SSOT.
+
+------------------------------------------------------------------------
+
+# review 파일 위치
+
+기본:
+
+    /tmp
+
+원하면 config에서 변경 가능:
+
+``` bash
+CODEX_REVIEW_OUT_DIR="$HOME/review_diffs_local"
+```
+
+※ review 파일은 git에 포함시키지 않는 것을 권장.
+
+------------------------------------------------------------------------
+
+# Troubleshooting
+
+## pull_spec 에러
+
+-   SSH 키 확인
+-   remote spec 경로 확인
+
+``` bash
+ssh shinjaehun@192.168.0.1
+ls ~/review_diffs
+```
+
+------------------------------------------------------------------------
+
+## send_review 실패
+
+-   원격 디렉토리 권한 확인
+-   scp 직접 테스트
+
+``` bash
+scp test.txt shinjaehun@192.168.0.1:~/review_diffs
+```
+
+------------------------------------------------------------------------
+
+# 철학
+
+-   spec = 입력(계약)
+-   commit message = 의도
+-   diff = 구현 증거
+-   review = 교환 패킷
+-   git = 과거 기록 저장소
+
+------------------------------------------------------------------------
+
+# 권장 운영 방식
+
+로컬: 구현 전용\
+원격: 설계 + 토론 전용
+
+spec → 구현 → review → 토론 → 다음 spec
+
+이 루프를 반복.
+
+------------------------------------------------------------------------

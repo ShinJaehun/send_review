@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# pull_spec
+#
+# 목적:
+# - 원격에 있는 spec.md를 로컬 프로젝트 루트로 가져옵니다.
+# - "오늘 작업 명세(SSOT)"를 로컬에 확정시키는 단계입니다.
+#
+# 기본 동작:
+# - remote spec: config의 CODEX_REVIEW_SPEC_REMOTE
+# - local  spec: config의 CODEX_REVIEW_SPEC_LOCAL
+# - 인자를 주면 해당 값을 우선 사용(override)
+#
+# 주의:
+# - local spec은 overwrite(덮어쓰기) 됩니다.
+# - 이전 spec은 git 히스토리로 남기는 방식.
+
+load_config() {
+  # config 경로는 필요하면 환경변수로 override 가능
+  local cfg="${CODEX_REVIEW_CONFIG:-$HOME/.config/codex_review/config}"
+  if [[ -f "$cfg" ]]; then
+    # shellcheck disable=SC1090
+    source "$cfg"
+  fi
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: pull_spec [remote_spec_path] [local_spec_path]
+
+Defaults (from config):
+  remote: CODEX_REVIEW_SPEC_REMOTE
+  local : CODEX_REVIEW_SPEC_LOCAL
+
+Examples:
+  pull_spec
+  pull_spec ~/review_diffs/spec.md /path/to/project/spec.md
+EOF
+}
+
+require_var() {
+  # 필수 config 값 체크
+  local name="$1"
+  local val="${!name:-}"
+  if [[ -z "$val" ]]; then
+    echo "Error: missing required config var: $name" >&2
+    exit 1
+  fi
+}
+
+main() {
+  load_config
+
+  # SSH 접속에 필요한 값
+  require_var CODEX_REVIEW_TARGET_USER
+  require_var CODEX_REVIEW_TARGET_HOST
+
+  # 인자 우선, 없으면 config 기본값 사용
+  local remote_spec="${1:-${CODEX_REVIEW_SPEC_REMOTE:-}}"
+  local local_spec="${2:-${CODEX_REVIEW_SPEC_LOCAL:-./spec.md}}"
+
+  # remote_spec이 비어있으면 target_dir/spec.md로 fallback
+  if [[ -z "$remote_spec" ]]; then
+    local target_dir="${CODEX_REVIEW_TARGET_DIR:-~/review_diffs}"
+    remote_spec="${target_dir%/}/spec.md"
+  fi
+
+  # 로컬 저장 디렉토리 생성
+  mkdir -p "$(dirname "$local_spec")"
+
+  echo "Pulling spec from: ${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}:${remote_spec}" >&2
+  echo "To local path   : $local_spec" >&2
+
+  # 원격 파일 존재 체크(에러 메시지를 명확히 하기 위해 scp 전에 ssh test)
+  ssh "${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}" \
+    "test -f ${remote_spec}" || {
+      echo "Error: remote spec not found: ${remote_spec}" >&2
+      exit 1
+    }
+
+  # 실제 복사(overwrite)
+  scp "${CODEX_REVIEW_TARGET_USER}@${CODEX_REVIEW_TARGET_HOST}:${remote_spec}" "$local_spec"
+
+  echo "Done. Local spec updated: $local_spec" >&2
+}
+
+main "$@"
